@@ -60,6 +60,7 @@
         </div>
       </div>
 
+      <div id="scope"></div>
       <div id="crosshair"><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i><i class="dot"></i></div>
       <div id="hitmarker"></div>
       <div id="dmg-vignette"></div>
@@ -76,7 +77,7 @@
     <div id="menu-main" class="menu">
       <div class="menu-side">
         <div class="big-logo"><span class="slash"></span><span data-title>VANTA</span></div>
-        <div class="tagline">TEAM DEATHMATCH &nbsp;/&nbsp; SKYPORT</div>
+        <div class="tagline">TEAM DEATHMATCH &nbsp;/&nbsp; <span id="menu-map">SKYPORT</span></div>
         <button class="btn primary" data-action="play">PLAY</button>
         <button class="btn" data-action="settings">SETTINGS</button>
         <button class="btn" data-action="controls">CONTROLS</button>
@@ -88,6 +89,10 @@
       <div class="panel">
         <h2>MATCH SETUP</h2>
         <label>Callsign <input type="text" id="set-name" maxlength="12" spellcheck="false" /></label>
+        <label>Map <select id="set-map"></select></label>
+        <div class="blurb" id="map-blurb"></div>
+        <label>Primary weapon <select id="set-primary"></select></label>
+        <div class="wstats" id="wstats-play"></div>
         <label>Bot difficulty
           <select id="set-difficulty"><option value="easy">Easy</option><option value="normal">Normal</option><option value="hard">Hard</option></select>
         </label>
@@ -150,6 +155,8 @@
     <div id="menu-pause" class="menu hidden dim">
       <div class="panel narrow">
         <h2>PAUSED</h2>
+        <label>Primary weapon <select id="pause-primary"></select></label>
+        <div class="wstats" id="wstats-pause"></div>
         <button class="btn primary" data-action="resume">RESUME</button>
         <button class="btn" data-action="settings">SETTINGS</button>
         <button class="btn" data-action="controls">CONTROLS</button>

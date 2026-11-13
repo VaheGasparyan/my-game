@@ -3,8 +3,11 @@
 // same shape a network client would send to an authoritative server later on.
 
 import * as THREE from 'three';
-import { PLAYER as P, WEAPONS, ABILITIES, BOT_NAMES, BOT_SKILL, TEAM_INFO, MATCH_DEFAULTS } from '@shared/config.js';
-import { SoldierModel } from './character.js';
+import {
+  PLAYER as P, WEAPONS, WEAPON_INDEX, DEFAULT_PRIMARY, SIDEARM, BOT_PRIMARIES, weaponOf,
+  ABILITIES, BOT_NAMES, BOT_SKILL, TEAM_INFO, MATCH_DEFAULTS,
+} from '@shared/config.js';
+import { SoldierModel, CHARACTER_IDS } from './character.js';
 import { BotBrain } from './bot.js';
 import { sfx } from './audio.js';
 
@@ -52,6 +55,15 @@ export class Game {
     this.grenadeMat = new THREE.MeshLambertMaterial({ color: 0xb6f02a, emissive: 0x4a6a00 });
   }
 
+  /** Swap the map (collision world, nav graph, scene, effects). Ends any running match. */
+  setEnvironment(env) {
+    this.stop();
+    this.world = env.world;
+    this.nav = env.nav;
+    this.scene = env.scene;
+    this.effects = env.effects;
+  }
+
   // ------------------------------------------------------------------ setup
   start(opts) {
     this.stop();
@@ -70,9 +82,11 @@ export class Game {
       for (let i = 0; i < this.opts.teamSize; i++) {
         const isPlayer = team === 0 && i === 0;
         const s = this._makeSoldier(id++, isPlayer ? this.opts.playerName || 'You' : names.pop() || 'Bot' + id, team, !isPlayer);
+        const primary = isPlayer ? this.opts.primary : BOT_PRIMARIES[(Math.random() * BOT_PRIMARIES.length) | 0];
+        s.loadout = [WEAPON_INDEX[primary] ?? WEAPON_INDEX[DEFAULT_PRIMARY], WEAPON_INDEX[SIDEARM]];
         if (isPlayer) this.player = s;
         else {
-          s.model = new SoldierModel(team);
+          s.model = new SoldierModel(team, CHARACTER_IDS[s.id % CHARACTER_IDS.length]);
           this.scene.add(s.model.group);
           s.brain = new BotBrain(this, s, skill);
         }
@@ -99,7 +113,9 @@ export class Game {
       body: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, grounded: true },
       yaw: 0, pitch: 0,
       health: P.maxHealth, shield: P.maxShield, alive: true,
-      weapon: 0, weapons: WEAPONS.map((w) => ({ ammo: w.mag, reserve: w.reserve })),
+      weapon: 0,                                                   // loadout slot in hand
+      loadout: [WEAPON_INDEX[DEFAULT_PRIMARY], WEAPON_INDEX[SIDEARM]], // indices into WEAPONS
+      weapons: [],                                                 // per-slot { ammo, reserve }
       reloadT: 0, nextFire: 0, fireHeld: false, bloom: 0,
       dashCd: 0, dashT: 0, dashX: 0, dashZ: 0, grenadeCd: 0,
       kills: 0, deaths: 0, respawnT: 0, protectT: 0,
@@ -131,7 +147,7 @@ export class Game {
     s.pitch = s.cmd.pitch = 0;
     s.health = P.maxHealth; s.shield = P.maxShield; s.alive = true;
     s.weapon = 0;
-    s.weapons = WEAPONS.map((w) => ({ ammo: w.mag, reserve: s.isBot ? 9999 : w.reserve }));
+    s.weapons = s.loadout.map((i) => ({ ammo: WEAPONS[i].mag, reserve: s.isBot ? 9999 : WEAPONS[i].reserve }));
     s.reloadT = 0; s.bloom = 0; s.dashT = 0; s.fireHeld = false;
     s.nextFire = this.time + 0.3;
     s.protectT = initial ? 0 : P.spawnProtection;
@@ -174,12 +190,12 @@ export class Game {
     s.bloom = Math.max(0, s.bloom - dt * 0.09);
 
     // weapon switch
-    if (c.weapon >= 0 && c.weapon < WEAPONS.length && c.weapon !== s.weapon) {
+    if (c.weapon >= 0 && c.weapon < s.loadout.length && c.weapon !== s.weapon) {
       s.weapon = c.weapon;
       s.reloadT = 0;
       s.nextFire = this.time + 0.35;
     }
-    const W = WEAPONS[s.weapon], ws = s.weapons[s.weapon];
+    const W = weaponOf(s), ws = s.weapons[s.weapon];
 
     // reload
     if (s.reloadT > 0) {
@@ -237,6 +253,15 @@ export class Game {
   // ------------------------------------------------------------------ combat
   eye(s) { return [s.body.x, s.body.y + P.eye, s.body.z]; }
 
+  /** Swap a soldier's primary weapon (fresh magazine). Used by the loadout picker. */
+  setPrimary(s, id) {
+    const idx = WEAPON_INDEX[id];
+    if (idx === undefined || WEAPONS[idx].slot !== 'primary' || s.loadout[0] === idx) return;
+    s.loadout[0] = idx;
+    s.weapons[0] = { ammo: WEAPONS[idx].mag, reserve: s.isBot ? 9999 : WEAPONS[idx].reserve };
+    if (s.weapon === 0) { s.reloadT = 0; s.nextFire = this.time + 0.4; s.bloom = 0; }
+  }
+
   _shoot(s, W, ws) {
     ws.ammo--;
     s.protectT = 0; // shooting gives up spawn protection
@@ -254,31 +279,38 @@ export class Game {
     const f = aimDir(s.yaw, s.pitch);
     const rx = Math.cos(s.yaw), rz = -Math.sin(s.yaw);
     const ux = -rz * f[1], uy = rz * f[0] - rx * f[2], uz = rx * f[1];
-    const ang = Math.random() * Math.PI * 2, rad = spread * Math.sqrt(Math.random());
-    const ox = Math.cos(ang) * rad, oy = Math.sin(ang) * rad;
-    let dx = f[0] + rx * ox + ux * oy, dy = f[1] + uy * oy, dz = f[2] + rz * ox + uz * oy;
-    const dl = Math.hypot(dx, dy, dz);
-    dx /= dl; dy /= dl; dz /= dl;
-
     const [ex, ey, ez] = this.eye(s);
-    const wh = this.world.raycast(ex, ey, ez, dx, dy, dz, W.range);
-    let t = wh ? wh.t : W.range;
-    let victim = null, head = false;
-    for (const o of this.soldiers) {
-      if (o.team === s.team || !o.alive) continue;
-      const ob = o.body;
-      const tb = rayAABB(ex, ey, ez, dx, dy, dz, ob.x - 0.33, ob.y, ob.z - 0.33, ob.x + 0.33, ob.y + 1.42, ob.z + 0.33);
-      const th = rayAABB(ex, ey, ez, dx, dy, dz, ob.x - 0.2, ob.y + 1.42, ob.z - 0.2, ob.x + 0.2, ob.y + 1.8, ob.z + 0.2);
-      const tt = Math.min(tb, th);
-      if (tt < t) { t = tt; victim = o; head = th <= tb; }
-    }
-    const hx = ex + dx * t, hy = ey + dy * t, hz = ez + dz * t;
-
-    // visuals + sound
     const side = s === this.player ? 0.16 : 0.12, drop = s === this.player ? 0.13 : 0.4;
-    this.effects.tracer(ex + rx * side + f[0] * 0.8, ey - drop + f[1] * 0.8, ez + rz * side + f[2] * 0.8, hx, hy, hz);
-    if (victim) this.effects.burst(hx, hy, hz, TEAM_INFO[victim.team].color, 4, 4, 0.07);
-    else if (wh) this.effects.burst(hx, hy, hz, 0xe8e6f0, 3, 3.5, 0.06, wh.nx, wh.ny, wh.nz);
+
+    // launchers lob an explosive instead of tracing a bullet
+    if (W.projectile) this._launchGrenade(s, W.projectile, f, W.id);
+    const pellets = W.projectile ? 0 : W.pellets || 1;
+    for (let k = 0; k < pellets; k++) {
+      const ang = Math.random() * Math.PI * 2, rad = spread * Math.sqrt(Math.random());
+      const ox = Math.cos(ang) * rad, oy = Math.sin(ang) * rad;
+      let dx = f[0] + rx * ox + ux * oy, dy = f[1] + uy * oy, dz = f[2] + rz * ox + uz * oy;
+      const dl = Math.hypot(dx, dy, dz);
+      dx /= dl; dy /= dl; dz /= dl;
+
+      const wh = this.world.raycast(ex, ey, ez, dx, dy, dz, W.range);
+      let t = wh ? wh.t : W.range;
+      let victim = null, head = false;
+      for (const o of this.soldiers) {
+        if (o.team === s.team || !o.alive) continue;
+        const ob = o.body;
+        const tb = rayAABB(ex, ey, ez, dx, dy, dz, ob.x - 0.33, ob.y, ob.z - 0.33, ob.x + 0.33, ob.y + 1.42, ob.z + 0.33);
+        const th = rayAABB(ex, ey, ez, dx, dy, dz, ob.x - 0.2, ob.y + 1.42, ob.z - 0.2, ob.x + 0.2, ob.y + 1.8, ob.z + 0.2);
+        const tt = Math.min(tb, th);
+        if (tt < t) { t = tt; victim = o; head = th <= tb; }
+      }
+      const hx = ex + dx * t, hy = ey + dy * t, hz = ez + dz * t;
+
+      this.effects.tracer(ex + rx * side + f[0] * 0.8, ey - drop + f[1] * 0.8, ez + rz * side + f[2] * 0.8, hx, hy, hz);
+      if (victim) this.effects.burst(hx, hy, hz, TEAM_INFO[victim.team].color, 4, 4, 0.07);
+      else if (wh) this.effects.burst(hx, hy, hz, 0xe8e6f0, 3, 3.5, 0.06, wh.nx, wh.ny, wh.nz);
+      if (victim) this.damage(victim, W.damage * (head ? W.headMult : 1), s, W.id, head);
+    }
+
     s.model?.muzzleFlash();
     if (s === this.player) {
       sfx.shot(W.id, 1, 0);
@@ -287,8 +319,6 @@ export class Game {
       const sp = this.spatial(b.x, b.y, b.z);
       sfx.shot(W.id, sp.vol * 0.8, sp.pan);
     }
-
-    if (victim) this.damage(victim, W.damage * (head ? W.headMult : 1), s, W.id, head);
   }
 
   damage(v, amount, attacker, weapon, head = false) {
@@ -327,23 +357,29 @@ export class Game {
   }
 
   _throwGrenade(s) {
-    const G = ABILITIES.grenade;
-    s.grenadeCd = G.cooldown;
-    const f = aimDir(s.yaw, s.pitch + 0.08);
+    s.grenadeCd = ABILITIES.grenade.cooldown;
+    this._launchGrenade(s, ABILITIES.grenade, aimDir(s.yaw, s.pitch + 0.08), 'grenade', 2);
+    if (s === this.player) sfx.throw();
+  }
+
+  /**
+   * Spawn an explosive projectile. spec: { speed, fuse, radius, damage, impact? }
+   * (impact = explode on first contact instead of bouncing). f: unit launch direction.
+   */
+  _launchGrenade(s, spec, f, weapon, lift = 1) {
     const [ex, ey, ez] = this.eye(s);
     const mesh = new THREE.Mesh(this.grenadeGeo, this.grenadeMat);
     mesh.castShadow = true;
     this.scene.add(mesh);
     this.grenades.push({
       x: ex + f[0] * 0.4, y: ey - 0.1 + f[1] * 0.4, z: ez + f[2] * 0.4,
-      vx: f[0] * G.speed + s.body.vx * 0.5, vy: f[1] * G.speed + 2, vz: f[2] * G.speed + s.body.vz * 0.5,
-      fuse: G.fuse, owner: s, mesh,
+      vx: f[0] * spec.speed + s.body.vx * 0.5, vy: f[1] * spec.speed + lift, vz: f[2] * spec.speed + s.body.vz * 0.5,
+      fuse: spec.fuse, radius: spec.radius, damage: spec.damage, impact: !!spec.impact, armT: 0.08,
+      weapon, owner: s, mesh,
     });
-    if (s === this.player) sfx.throw();
   }
 
   _updateGrenades(dt) {
-    const G = ABILITIES.grenade;
     for (let i = this.grenades.length - 1; i >= 0; i--) {
       const g = this.grenades[i];
       g.fuse -= dt;
@@ -360,7 +396,16 @@ export class Game {
           if (hit.ny > 0.7) { g.vx *= 0.75; g.vz *= 0.75; if (Math.abs(g.vy) < 1.2) g.vy = 0; }
           const back = Math.max(0, hit.t - 0.14);
           g.x += (mx / len) * back; g.y += (my / len) * back; g.z += (mz / len) * back;
+          if (g.impact) g.fuse = 0;
         } else { g.x += mx; g.y += my; g.z += mz; }
+      }
+      if (g.impact && g.fuse > 0 && (g.armT -= dt) <= 0) {
+        // launcher rounds also go off when they reach an enemy
+        for (const o of this.soldiers) {
+          if (!o.alive || o.team === g.owner.team) continue;
+          const dy = g.y - o.body.y;
+          if (dy > -0.2 && dy < 2 && Math.hypot(o.body.x - g.x, o.body.z - g.z) < 0.6) { g.fuse = 0; break; }
+        }
       }
       g.mesh.position.set(g.x, g.y, g.z);
       g.mesh.rotation.x += dt * 9; g.mesh.rotation.z += dt * 6;
@@ -369,7 +414,7 @@ export class Game {
         this.scene.remove(g.mesh);
         this.grenades.splice(i, 1);
         if (g.y < -20) continue;
-        this.effects.explosion(g.x, g.y, g.z, G.radius * 0.6);
+        this.effects.explosion(g.x, g.y, g.z, g.radius * 0.6);
         const sp = this.spatial(g.x, g.y, g.z);
         sfx.explosion(sp.vol, sp.pan);
         this.hooks.onExplosion?.(g.x, g.y, g.z);
@@ -377,10 +422,10 @@ export class Game {
           if (!o.alive || (o.team === g.owner.team && o !== g.owner)) continue;
           const cy = o.body.y + 0.9;
           const d = Math.hypot(o.body.x - g.x, cy - g.y, o.body.z - g.z);
-          if (d > G.radius) continue;
+          if (d > g.radius) continue;
           if (!this.world.lineOfSight(g.x, g.y + 0.25, g.z, o.body.x, cy, o.body.z)) continue;
-          const dmg = G.damage * (1 - d / G.radius) * (o === g.owner ? 0.5 : 1);
-          this.damage(o, dmg, g.owner, 'grenade');
+          const dmg = g.damage * (1 - d / g.radius) * (o === g.owner ? 0.5 : 1);
+          this.damage(o, dmg, g.owner, g.weapon);
         }
       }
     }

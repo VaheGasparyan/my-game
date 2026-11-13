@@ -228,3 +228,20 @@ kbd { font: 700 12px var(--font); background: #fff; color: #141a30; padding: 2px
 #end-score { text-align: center; font-size: 30px; font-weight: 900; font-style: italic; }
 #end-score .b { color: #7fb0ff; }
 #end-score .o { color: #ffa257; }
+
+/* sniper scope overlay */
+#scope {
+  position: absolute; inset: 0; opacity: 0;
+  background:
+    linear-gradient(#000, #000) center / 2px 68vh no-repeat,
+    linear-gradient(#000, #000) center / 68vh 2px no-repeat,
+    radial-gradient(circle at center, transparent 0, transparent 33.8vh, #05060c 34.2vh);
+}
+#scope.on { opacity: 1; }
+
+/* weapon stat bars in the loadout pickers */
+.wstats { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: center; font-size: 11px; letter-spacing: 1px; font-weight: 600; opacity: 0.9; margin-top: -6px; }
+.wstats i { display: block; height: 6px; background: rgba(255, 255, 255, 0.14); transform: skewX(-22deg); }
+.wstats i b { display: block; height: 100%; background: var(--lime); }
+
+.blurb { font-size: 13px; font-weight: 500; opacity: 0.7; margin-top: -8px; }

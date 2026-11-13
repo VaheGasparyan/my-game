@@ -74,13 +74,38 @@ class Sfx {
   shot(kind = 'rifle', vol = 1, pan = 0) {
     if (!this.ctx || vol < 0.01) return;
     const out = this._out(vol * 0.55, pan);
-    if (kind === 'pistol') {
-      this._noise(out, 0.11, 2600, 'lowpass', 0.5, 1);
-      this._tone(out, 240, 60, 0.09, 'triangle', 0.9);
-    } else {
-      this._noise(out, 0.13, 1900, 'lowpass', 0.6, 1);
-      this._noise(out, 0.05, 5200, 'highpass', 0.5, 0.35);
-      this._tone(out, 170, 45, 0.1, 'square', 0.5);
+    switch (kind) {
+      case 'pistol':
+        this._noise(out, 0.11, 2600, 'lowpass', 0.5, 1);
+        this._tone(out, 240, 60, 0.09, 'triangle', 0.9);
+        break;
+      case 'ak47': // heavier, lower crack
+        this._noise(out, 0.17, 1350, 'lowpass', 0.7, 1.15);
+        this._noise(out, 0.05, 4200, 'highpass', 0.5, 0.3);
+        this._tone(out, 130, 38, 0.14, 'square', 0.7);
+        break;
+      case 'smg':
+        this._noise(out, 0.08, 3000, 'lowpass', 0.6, 0.85);
+        this._tone(out, 260, 90, 0.06, 'square', 0.35);
+        break;
+      case 'shotgun':
+        this._noise(out, 0.32, 900, 'lowpass', 0.5, 1.5);
+        this._noise(out, 0.1, 3000, 'highpass', 0.5, 0.4);
+        this._tone(out, 95, 30, 0.26, 'sine', 1.1);
+        break;
+      case 'launcher': // hollow "thoomp"
+        this._tone(out, 210, 55, 0.22, 'sine', 1.3);
+        this._noise(out, 0.12, 700, 'lowpass', 0.8, 0.7);
+        break;
+      case 'sniper':
+        this._noise(out, 0.4, 1600, 'lowpass', 0.5, 1.4);
+        this._noise(out, 0.08, 6000, 'highpass', 0.5, 0.6);
+        this._tone(out, 150, 30, 0.3, 'triangle', 1);
+        break;
+      default:
+        this._noise(out, 0.13, 1900, 'lowpass', 0.6, 1);
+        this._noise(out, 0.05, 5200, 'highpass', 0.5, 0.35);
+        this._tone(out, 170, 45, 0.1, 'square', 0.5);
     }
   }
 

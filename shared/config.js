@@ -30,44 +30,67 @@ export const PLAYER = {
   spawnProtection: 1.5,
 };
 
+// Every weapon in the game. `slot` decides where it sits in a loadout.
+// zoom  : FOV multiplier while aiming (lower = more zoom)
+// pellets: rays per shot (shotguns)        scope: full-screen scope overlay while aiming
+// projectile: fires an explosive round instead of a bullet (grenade launcher)
 export const WEAPONS = [
   {
-    id: 'rifle',
-    name: 'VR-9 Rifle',
-    auto: true,
-    damage: 22,
-    headMult: 2,
-    rpm: 600,
-    mag: 30,
-    reserve: 120,
-    reloadTime: 1.9,
-    spread: 0.012,
-    adsSpread: 0.003,
-    moveSpread: 0.02,
-    bloomPerShot: 0.006,
-    maxBloom: 0.045,
-    recoil: 0.011,
-    range: 120,
+    id: 'ak47', name: 'AK-47', slot: 'primary', auto: true,
+    damage: 27, headMult: 2, rpm: 600, mag: 30, reserve: 120, reloadTime: 2.3,
+    spread: 0.014, adsSpread: 0.004, moveSpread: 0.024, bloomPerShot: 0.008, maxBloom: 0.06,
+    recoil: 0.016, range: 120, zoom: 0.72,
   },
   {
-    id: 'pistol',
-    name: 'P-3 Sidearm',
-    auto: false,
-    damage: 34,
-    headMult: 2,
-    rpm: 360,
-    mag: 12,
-    reserve: 60,
-    reloadTime: 1.3,
-    spread: 0.008,
-    adsSpread: 0.002,
-    moveSpread: 0.012,
-    bloomPerShot: 0.012,
-    maxBloom: 0.05,
-    recoil: 0.02,
-    range: 80,
+    id: 'rifle', name: 'VR-9 Rifle', slot: 'primary', auto: true,
+    damage: 21, headMult: 2, rpm: 720, mag: 30, reserve: 120, reloadTime: 1.9,
+    spread: 0.012, adsSpread: 0.003, moveSpread: 0.02, bloomPerShot: 0.005, maxBloom: 0.045,
+    recoil: 0.009, range: 120, zoom: 0.72,
+  },
+  {
+    id: 'smg', name: 'MX-7 SMG', slot: 'primary', auto: true,
+    damage: 15, headMult: 1.8, rpm: 900, mag: 35, reserve: 175, reloadTime: 1.6,
+    spread: 0.02, adsSpread: 0.008, moveSpread: 0.008, bloomPerShot: 0.004, maxBloom: 0.04,
+    recoil: 0.007, range: 60, zoom: 0.8,
+  },
+  {
+    id: 'shotgun', name: 'Breaker-12', slot: 'primary', auto: false, pellets: 8,
+    damage: 14, headMult: 1.5, rpm: 75, mag: 6, reserve: 30, reloadTime: 2.4,
+    spread: 0.07, adsSpread: 0.05, moveSpread: 0.01, bloomPerShot: 0, maxBloom: 0,
+    recoil: 0.05, range: 40, zoom: 0.82,
+  },
+  {
+    id: 'sniper', name: 'Longbow', slot: 'primary', auto: false, scope: true,
+    damage: 110, headMult: 2, rpm: 45, mag: 5, reserve: 25, reloadTime: 2.6,
+    spread: 0.05, adsSpread: 0, moveSpread: 0.05, bloomPerShot: 0, maxBloom: 0,
+    recoil: 0.06, range: 200, zoom: 0.28,
+  },
+  {
+    id: 'launcher', name: 'Thumper GL', slot: 'primary', auto: false,
+    // fires an arcing explosive round that detonates on impact (see Game._launchGrenade)
+    projectile: { speed: 32, fuse: 3, radius: 5.5, damage: 105, impact: true },
+    damage: 105, headMult: 1, rpm: 55, mag: 4, reserve: 16, reloadTime: 2.8,
+    spread: 0.012, adsSpread: 0.004, moveSpread: 0.012, bloomPerShot: 0, maxBloom: 0,
+    recoil: 0.045, range: 60, zoom: 0.82,
+  },
+  {
+    id: 'pistol', name: 'P-3 Sidearm', slot: 'secondary', auto: false,
+    damage: 34, headMult: 2, rpm: 360, mag: 12, reserve: 60, reloadTime: 1.3,
+    spread: 0.008, adsSpread: 0.002, moveSpread: 0.012, bloomPerShot: 0.012, maxBloom: 0.05,
+    recoil: 0.02, range: 80, zoom: 0.8,
   },
 ];
+
+export const WEAPON_INDEX = Object.fromEntries(WEAPONS.map((w, i) => [w.id, i]));
+export const PRIMARIES = WEAPONS.filter((w) => w.slot === 'primary');
+export const DEFAULT_PRIMARY = 'ak47';
+export const SIDEARM = 'pistol';
+export const BOT_PRIMARIES = ['ak47', 'rifle', 'smg'];
+
+/** The weapon a soldier currently has in hand. soldier.weapon is the loadout slot (0 primary, 1 sidearm). */
+export function weaponOf(s) {
+  return WEAPONS[s.loadout[s.weapon]];
+}
 
 export const ABILITIES = {
   dash: { cooldown: 6, speed: 21, duration: 0.2 },

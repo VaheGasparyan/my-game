@@ -1,7 +1,7 @@
 // DOM heads-up display. Only touches the DOM when a value actually changes.
 
 import * as THREE from 'three';
-import { PLAYER as P, WEAPONS, ABILITIES, TEAM_INFO } from '@shared/config.js';
+import { PLAYER as P, weaponOf, ABILITIES, TEAM_INFO } from '@shared/config.js';
 
 const $ = (id) => document.getElementById(id);
 const GUN_SVG = '<svg viewBox="0 0 90 30"><path d="M2 12h10l3-4h34l2-4h10l2 4h14v5h11v3H64l-3 3H46l-5 9h-8l3-9H24l-5 8h-7l2-8H2z" fill="#fff"/></svg>';
@@ -9,7 +9,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const _v = new THREE.Vector3();
 
 export class Hud {
-  constructor(map) {
+  constructor() {
     this.root = $('hud');
     this.el = {
       sb: $('score-blue'), so: $('score-orange'), timer: $('timer'),
@@ -18,7 +18,7 @@ export class Hud {
       dash: $('ab-dash'), nade: $('ab-nade'),
       feed: $('killfeed'), cross: $('crosshair'), hit: $('hitmarker'),
       vig: $('dmg-vignette'), dirs: $('dmg-dirs'), tags: $('nametags'),
-      reload: $('reload-hint'), msg: $('center-msg'), board: $('scoreboard'), fps: $('fps'),
+      reload: $('reload-hint'), scope: $('scope'), msg: $('center-msg'), board: $('scoreboard'), fps: $('fps'),
     };
     this.el.hit.innerHTML = '<svg viewBox="0 0 26 26"><path d="M2 2l7 7M24 2l-7 7M2 24l7-7M24 24l-7-7" stroke="currentColor" stroke-width="2.6" fill="none"/></svg>';
     this.cache = {};
@@ -34,7 +34,12 @@ export class Hud {
 
     this.mini = $('minimap');
     this.mctx = this.mini.getContext('2d');
+  }
+
+  /** Call whenever the active map changes. */
+  setMap(map) {
     this._prerenderMap(map);
+    document.getElementById('hud-map').textContent = map.name;
   }
 
   show(on) { this.root.classList.toggle('hidden', !on); }
@@ -144,7 +149,7 @@ export class Hud {
       e.shFill.style.width = (v / P.maxShield) * 100 + '%';
     });
 
-    const W = WEAPONS[p.weapon], ws = p.weapons[p.weapon];
+    const W = weaponOf(p), ws = p.weapons[p.weapon];
     this._set('mag', ws.ammo, (v) => {
       e.mag.textContent = v;
       e.mag.classList.toggle('low', v <= W.mag * 0.25);
@@ -165,9 +170,11 @@ export class Hud {
 
     // crosshair spreads with bloom / movement, hides when aiming
     const moving = Math.hypot(p.body.vx, p.body.vz) > 1.5 || !p.body.grounded;
-    const gap = Math.round(5 + (p.bloom + (moving ? W.moveSpread : 0)) * 420);
+    const gap = Math.round(2 + (W.spread + p.bloom + (moving ? W.moveSpread : 0)) * 330);
     this._set('gap', gap, (v) => e.cross.style.setProperty('--gap', v + 'px'));
     this._set('crossOn', p.alive && view.ads < 0.6, (v) => (e.cross.style.opacity = v ? 1 : 0));
+
+    this._set('scope', !!view.scoped, (v) => e.scope.classList.toggle('on', v));
 
     // hit marker + damage feedback
     if (this.hitT > 0) { this.hitT -= dt; e.hit.style.opacity = Math.min(1, this.hitT * 8); }
@@ -190,7 +197,7 @@ export class Hud {
       this.feedKey = key;
       e.feed.innerHTML = game.killfeed.map((k) => {
         const mine = k.killer === p || k.victim === p;
-        const icon = k.weapon === 'grenade' ? '<b>✹</b>' : k.weapon === 'fall' ? '<b>↓</b>' : GUN_SVG;
+        const icon = k.weapon === 'grenade' || k.weapon === 'launcher' ? '<b>✹</b>' : k.weapon === 'fall' ? '<b>↓</b>' : GUN_SVG;
         return `<div class="kf${mine ? ' mine' : ''}">` +
           (k.killer ? `<span class="t${k.killer.team}">${esc(k.killer.name)}</span>` : '') +
           icon + (k.head ? '<span class="hs">HEAD</span>' : '') +

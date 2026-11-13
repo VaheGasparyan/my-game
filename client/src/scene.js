@@ -2,7 +2,20 @@
 
 import * as THREE from 'three';
 import { rampHeight } from '@shared/world.js';
-import { COLORS } from '@shared/maps/skyport.js';
+import { COLORS } from '@shared/maps/builder.js';
+
+// Look of the sky and lighting. A map can override any of these through map.theme.
+const DEFAULT_THEME = {
+  sky: [0x4f74ec, 0x9cb4ff, 0xffc8a2, 0xc39ad6], // top, middle, horizon, below the horizon
+  fog: 0xe8c8c8,
+  fogRange: [90, 420],
+  hemi: [0xdfe6ff, 0xe6b89a, 1.75],              // sky colour, ground colour, intensity
+  sun: [0xffe7cf, 2.3],                          // colour, intensity
+  sunPos: [-34, 52, 30],
+  clouds: [0xffb98a, 0xffa68f, 0xffd3b0],
+  glowStrips: false,                             // floor markings ignore lighting (night maps)
+  hull: COLORS.concreteDark,
+};
 
 const matCache = new Map();
 function mat(color) {
@@ -176,7 +189,7 @@ function propMesh(p) {
   return g;
 }
 
-function buildSky(scene) {
+function buildSky(scene, T) {
   const sky = new THREE.Mesh(
     new THREE.SphereGeometry(480, 24, 16),
     new THREE.ShaderMaterial({
@@ -184,10 +197,10 @@ function buildSky(scene) {
       depthWrite: false,
       fog: false,
       uniforms: {
-        top: { value: new THREE.Color(0x4f74ec) },
-        mid: { value: new THREE.Color(0x9cb4ff) },
-        horizon: { value: new THREE.Color(0xffc8a2) },
-        below: { value: new THREE.Color(0xc39ad6) },
+        top: { value: new THREE.Color(T.sky[0]) },
+        mid: { value: new THREE.Color(T.sky[1]) },
+        horizon: { value: new THREE.Color(T.sky[2]) },
+        below: { value: new THREE.Color(T.sky[3]) },
       },
       vertexShader: 'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
       fragmentShader: `
@@ -207,7 +220,7 @@ function buildSky(scene) {
 
   // low-poly sunset clouds
   const puff = new THREE.IcosahedronGeometry(1, 0);
-  const cloudMats = [0xffb98a, 0xffa68f, 0xffd3b0].map((c) => new THREE.MeshLambertMaterial({ color: c, emissive: c, emissiveIntensity: 0.42, flatShading: true, fog: false }));
+  const cloudMats = T.clouds.map((c) => new THREE.MeshLambertMaterial({ color: c, emissive: c, emissiveIntensity: 0.42, flatShading: true, fog: false }));
   let seed = 7;
   const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
   for (let i = 0; i < 26; i++) {
@@ -230,13 +243,14 @@ function buildSky(scene) {
 }
 
 export function buildScene(map) {
+  const T = { ...DEFAULT_THEME, ...map.theme };
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0xe8c8c8, 90, 420);
+  scene.fog = new THREE.Fog(T.fog, T.fogRange[0], T.fogRange[1]);
 
-  const hemi = new THREE.HemisphereLight(0xdfe6ff, 0xe6b89a, 1.75);
+  const hemi = new THREE.HemisphereLight(T.hemi[0], T.hemi[1], T.hemi[2]);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xffe7cf, 2.3);
-  sun.position.set(-34, 52, 30);
+  const sun = new THREE.DirectionalLight(T.sun[0], T.sun[1]);
+  sun.position.set(...T.sunPos);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   const sc = sun.shadow.camera;
@@ -245,7 +259,7 @@ export function buildScene(map) {
   sun.shadow.normalBias = 0.03;
   scene.add(sun);
 
-  buildSky(scene);
+  buildSky(scene, T);
 
   const world = new THREE.Group();
   const floorTex = floorTexture();
@@ -282,7 +296,7 @@ export function buildScene(map) {
     if (r.stairs) stairMeshes(r, world); else world.add(wedgeMesh(r));
   }
   for (const s of map.strips) {
-    const m = new THREE.Mesh(unitBox, new THREE.MeshLambertMaterial({ color: s.color }));
+    const m = new THREE.Mesh(unitBox, T.glowStrips ? new THREE.MeshBasicMaterial({ color: s.color }) : new THREE.MeshLambertMaterial({ color: s.color }));
     m.scale.set(s.w, 0.02, s.d);
     m.position.set(s.x, 0.011, s.z);
     m.receiveShadow = true;
@@ -292,11 +306,24 @@ export function buildScene(map) {
   for (const p of map.props) world.add(propMesh(p));
 
   // underside of the floating platform, so it reads as a sky port when seen from the menu
-  const hull = new THREE.Mesh(new THREE.CylinderGeometry(30, 12, 14, 8), mat(COLORS.concreteDark));
-  hull.scale.set(1.25, 1, 0.9);
+  const hull = new THREE.Mesh(new THREE.CylinderGeometry(30, 12, 14, 8), mat(T.hull));
+  hull.scale.set((map.bounds.maxX / 34) * 1.25, 1, (map.bounds.maxZ / 24) * 0.9);
   hull.position.y = -9;
   world.add(hull);
 
   scene.add(world);
-  return { scene, sun };
+
+  /** Free GPU resources when switching maps. Shared geometry/materials are left alone. */
+  const dispose = () => {
+    scene.traverse((o) => {
+      if (!o.isMesh) return;
+      if (o.geometry !== unitBox) o.geometry.dispose();
+      for (const m of [].concat(o.material)) {
+        if (matCache.get(m.color?.getHex?.()) === m) continue;
+        m.map?.dispose();
+        m.dispose();
+      }
+    });
+  };
+  return { scene, sun, dispose };
 }

@@ -8,6 +8,8 @@ export const DEFAULTS = {
   invertY: false,
   shadows: true,
   showFps: false,
+  map: 'skyport',
+  primary: 'ak47',
   difficulty: 'normal',
   teamSize: 4,
   duration: 300,
