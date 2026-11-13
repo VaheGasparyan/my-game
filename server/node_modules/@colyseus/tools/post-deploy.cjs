@@ -1,0 +1,292 @@
+#!/usr/bin/env node
+const pm2 = require('pm2');
+const cst = require('pm2/constants');
+const fs = require('fs');
+const path = require('path');
+const shared = require('./pm2/shared.cjs');
+const rollout = require('./pm2/rollout.cjs');
+const cloudEnv = require('./pm2/cloud-env.cjs');
+
+const opts = { env: process.env.NODE_ENV || "production", };
+
+const CONFIG_FILE = [
+  'ecosystem.config.cjs',
+  'ecosystem.config.js',
+  'pm2.config.cjs',
+  'pm2.config.js',
+].find((filename) => fs.existsSync(path.resolve(pm2.cwd, filename)));
+
+/**
+ * TODO: if not provided, auto-detect entry-point & dynamically generate ecosystem config
+ */
+if (!CONFIG_FILE) {
+  throw new Error('missing ecosystem config file. make sure to provide one with a valid "script" entrypoint file path.');
+}
+
+const CONFIG_FILE_PATH = `${pm2.cwd}/${CONFIG_FILE}`;
+
+const AGENT_NAME = '@colyseus/tools';
+const AGENT_ACTION = 'post-deploy';
+const AGENT_WAIT_MS = Number(process.env.AGENT_WAIT_MS || 30 * 1000);
+
+/**
+ * Try to handle post-deploy via PM2 module first (pm2 install @colyseus/tools)
+ * If not available, fallback to legacy post-deploy script.
+ */
+waitForAgent().then(() => {
+  triggerAgent(`${pm2.cwd}:${CONFIG_FILE_PATH}`, function (err, result) {
+    if (err) {
+      console.log("Proceeding with legacy post-deploy script...");
+      postDeploy();
+
+    } else {
+      if (result?.success === false) {
+        console.error(result?.message || "Post-deploy failed. Check application logs for more details.");
+        process.exit(1);
+      } else {
+        console.log(result?.message || "Post-deploy success.");
+        process.exit();
+      }
+    }
+  });
+});
+
+/**
+ * Send the post-deploy action to the agent and wait for its reply to it.
+ *
+ * Not pm2.trigger(): it counts replies against a process count it only learns
+ * once the message is sent, so a reply faster than that (the agent answers at
+ * once when a deploy waits or is superseded) is dropped and the call never
+ * returns. It also takes any reply from the agent, so overlapping deploys read
+ * each other's. The agent echoes a request id instead; one from before request
+ * ids replies without it.
+ */
+function triggerAgent(params, cb) {
+  const requestId = `${process.pid}-${Date.now()}`;
+  let done = false;
+  const finish = (err, result) => {
+    if (done) { return; }
+    done = true;
+    cb(err, result);
+  };
+
+  pm2.launchBus((err, bus) => {
+    if (err) { return finish(err); }
+
+    bus.on('axm:reply', (packet) => {
+      if (packet.process?.name !== AGENT_NAME) { return; }
+
+      const result = packet.data?.return;
+      if (result?.requestId !== undefined && result.requestId !== requestId) { return; }
+
+      finish(null, result);
+    });
+
+    pm2.msgProcess({ name: AGENT_NAME, msg: AGENT_ACTION, opts: `${params}:${requestId}` }, (err, data) => {
+      if (err) { return finish(err); }
+      if (!data?.process_count) { return finish(new Error('Unknown process')); }
+    });
+  });
+}
+
+/**
+ * Wait until the agent has registered its action, starting it first when it's
+ * installed but not running.
+ *
+ * On boot, `pm2 ping` launches the agent and returns before the agent is
+ * ready, and PM2 only delivers a trigger to processes that already registered
+ * the action. Without waiting, every reboot fell back to the legacy script,
+ * which starts the app without the agent's defaults (e.g. `kill_timeout`).
+ *
+ * PM2 launches modules only when its CLI or pm2.connect() spawns the daemon.
+ * One spawned any other way -- by an older report-stats' cron, or by this
+ * script's own pm2 calls after a failed colyseus-boot took the unit's daemon
+ * down -- runs without the agent, and every later deploy would take the
+ * legacy script.
+ *
+ * Returns immediately when the agent isn't installed or won't start; after
+ * AGENT_WAIT_MS the trigger is attempted anyway.
+ */
+function waitForAgent() {
+  const deadline = Date.now() + AGENT_WAIT_MS;
+  const installed = fs.existsSync(path.join(cst.DEFAULT_MODULE_PATH, AGENT_NAME));
+  let waited = false;
+  let started = false;
+
+  return new Promise((resolve) => {
+    // a daemon this connect() spawns launches its modules itself
+    pm2.connect(function check() {
+      pm2.describe(AGENT_NAME, (err, procs) => {
+        const envs = (procs || []).map((proc) => proc.pm2_env).filter(Boolean);
+        const registered = envs.some((env) => env.axm_actions?.some((action) => action.action_name === AGENT_ACTION));
+        const starting = envs.some((env) => env.status === 'online' || env.status === 'launching');
+
+        if (!err && !starting && installed && !started) {
+          started = true;
+          console.log(`The ${AGENT_NAME} agent isn't running; starting it...`);
+
+          // launching it again would leave a stopped entry next to a new one
+          const next = () => setTimeout(check, 250);
+          return envs.length ? pm2.restart(AGENT_NAME, next) : pm2.launchModules(next);
+        }
+
+        if (err || registered || !starting || Date.now() >= deadline) {
+          if (waited) {
+            console.log(registered
+              ? `${AGENT_NAME} agent ready after ${AGENT_WAIT_MS - (deadline - Date.now())}ms.`
+              : `${AGENT_NAME} agent not ready after ${AGENT_WAIT_MS}ms.`);
+          }
+          return resolve();
+        }
+
+        if (!waited) {
+          waited = true;
+          console.log(`Waiting for the ${AGENT_NAME} agent to start...`);
+        }
+        setTimeout(check, 250);
+      });
+    });
+  });
+}
+
+async function postDeploy() {
+  shared.listApps(function (err, apps) {
+    bailOnErr(err);
+
+    if (apps.length === 0) {
+      //
+      // first deploy
+      //
+      pm2.start(cloudEnv.requireEcosystem(CONFIG_FILE_PATH), { ...opts }, () => onAppRunning());
+
+    } else {
+
+      //
+      // detect if cwd has changed, and restart PM2 if it has
+      //
+      if (apps[0].pm2_env.pm_cwd !== pm2.cwd) {
+        //
+        // remove all and start again with new cwd
+        //
+        restartAll();
+
+      } else {
+        //
+        // reload existing apps
+        //
+        reloadAll();
+      }
+    }
+  });
+}
+
+function onAppRunning(reloadedAppIds) {
+  // reset reloaded app stats
+  if (reloadedAppIds) {
+    resetAppStats(reloadedAppIds);
+  }
+  updateAndReloadNginx();
+}
+
+function restartAll () {
+  pm2.delete('all', function (err) {
+    // kill & start again
+    pm2.kill(function () {
+      pm2.start(cloudEnv.requireEcosystem(CONFIG_FILE_PATH), { ...opts }, () => onAppRunning());
+    });
+  });
+}
+
+async function reloadAll(retry = 0) {
+  // Read user's ecosystem config to get the desired number of instances
+  const config = await shared.getAppConfig(CONFIG_FILE_PATH);
+  const desiredInstances = config.apps?.[0]?.instances || shared.MAX_ACTIVE_PROCESSES;
+
+  pm2.reload(CONFIG_FILE_PATH, { ...opts }, function (err, apps) {
+    if (err) {
+      //
+      // Retry in case of "Reload in progress" error.
+      //
+      if (err.message === 'Reload in progress' && retry < 5) {
+        console.warn(err.message, ", retrying...");
+        setTimeout(() => reloadAll(retry + 1), 1000);
+
+      } else {
+        bailOnErr(err);
+      }
+
+      return;
+    }
+
+    const name = apps[0].name;
+    const reloadedAppIds = apps.map(app => app.pm_id);
+
+    // scale app to the number of instances specified in user's config
+    if (apps.length !== desiredInstances) {
+      pm2.scale(name, desiredInstances, () => onAppRunning(reloadedAppIds));
+
+    } else {
+      onAppRunning(reloadedAppIds);
+    }
+  });
+}
+
+function resetAppStats (reloadedAppIds) {
+  reloadedAppIds.forEach((pm_id) => {
+    pm2.reset(pm_id, (err, _) => {
+      if (err) {
+        console.error(err);
+      } else {
+        console.log(`metrics re-set for app_id: ${pm_id}`);
+      }
+    });
+  });
+};
+
+function updateAndReloadNginx() {
+  //
+  // If you are self-hosting and reading this file, consider using the
+  // following in your self-hosted environment:
+  //
+  // #!/bin/bash
+  // # Requires fswatch (`apt install fswatch`)
+  // # Reload NGINX when colyseus_servers.conf changes
+  // fswatch /etc/nginx/colyseus_servers.conf -m poll_monitor --event=Updated | while read event
+  // do
+  //     service nginx reload
+  // done
+
+  shared.listApps(function(err, apps) {
+    if (apps.length === 0) {
+      err = "no apps running.";
+    }
+    bailOnErr(err);
+
+    const addresses = [];
+
+    apps.forEach(function(app) {
+      addresses.push(`unix:${shared.PROCESS_UNIX_SOCK_PATH}${rollout.socketPort(app.pm2_env.NODE_APP_INSTANCE)}.sock`);
+    });
+
+    // write NGINX config
+    fs.writeFileSync(shared.NGINX_SERVERS_CONFIG_FILE, addresses.map(address => `server ${address};`).join("\n"), bailOnErr);
+
+    // "pm2 save"
+    pm2.dump(function (err, ret) {
+      bailOnErr(err);
+
+      // exit with success!
+      process.exit();
+    });
+
+  });
+}
+
+function bailOnErr(err) {
+  if (err) {
+    console.error(err);
+
+    // exit with error!
+    process.exit(1);
+  }
+}
